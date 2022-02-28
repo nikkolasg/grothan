@@ -1,5 +1,5 @@
 use ark_ec::{PairingEngine, ProjectiveCurve};
-use ark_ff::{BigInteger, BitIteratorLE, PrimeField};
+use ark_ff::{BigInteger, PrimeField};
 use ark_r1cs_std::{
     alloc::AllocVar,
     eq::EqGadget,
@@ -17,6 +17,7 @@ use ark_std::UniformRand;
 use std::ops::MulAssign;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum OpMode {
     Mul,       // GT * GT
     ScalarMul, // Fr * GT
@@ -43,6 +44,7 @@ where
     I: PairingEngine,
     IV: PairingVar<I>,
 {
+    #[allow(dead_code)]
     pub fn new<R: Rng + CryptoRng>(mut rng: &mut R, mode: OpMode) -> Self {
         // AT = e(aG,G)
         // BT = e(bG,G)
@@ -50,31 +52,31 @@ where
         let a = I::Fr::rand(&mut rng);
         let b = I::Fr::rand(&mut rng);
         let c = a + b;
-        let mut A = I::G1Projective::prime_subgroup_generator();
-        A.mul_assign(a);
-        let mut B = I::G1Projective::prime_subgroup_generator();
-        B.mul_assign(b);
-        let mut C = I::G1Projective::prime_subgroup_generator();
-        C.mul_assign(c);
-        let AT = I::pairing(A, I::G2Projective::prime_subgroup_generator());
-        let BT = I::pairing(B, I::G2Projective::prime_subgroup_generator());
-        let ABT = I::pairing(C, I::G2Projective::prime_subgroup_generator());
-        let T = I::pairing(
+        let mut ag = I::G1Projective::prime_subgroup_generator();
+        ag.mul_assign(a);
+        let mut bg = I::G1Projective::prime_subgroup_generator();
+        bg.mul_assign(b);
+        let mut cg = I::G1Projective::prime_subgroup_generator();
+        cg.mul_assign(c);
+        let at = I::pairing(ag, I::G2Projective::prime_subgroup_generator());
+        let bt = I::pairing(bg, I::G2Projective::prime_subgroup_generator());
+        let abt = I::pairing(cg, I::G2Projective::prime_subgroup_generator());
+        let t = I::pairing(
             I::G1Projective::prime_subgroup_generator(),
             I::G2Projective::prime_subgroup_generator(),
         );
         // CT = GT^c = GT^{a+b} = GT^a * GT^b
-        let CT = T.pow(&c.into_repr());
-        assert_eq!(ABT, CT);
-        let CT2 = T.pow(&a.into_repr()) * T.pow(&b.into_repr());
-        assert_eq!(CT, CT2);
+        let ct = t.pow(&c.into_repr());
+        assert_eq!(abt, ct);
+        let ct2 = t.pow(&a.into_repr()) * t.pow(&b.into_repr());
+        assert_eq!(ct, ct2);
         Self {
             mode: mode,
             c: c,
-            at: AT,
-            bt: BT,
-            ct: CT,
-            t: T,
+            at: at,
+            bt: bt,
+            ct: ct,
+            t: t,
             _iv: PhantomData,
             _i: PhantomData,
         }
@@ -96,7 +98,7 @@ where
                 ct.enforce_equal(&exp)?;
             }
             OpMode::ScalarMul => {
-                let mut exp = IV::GTVar::new_witness(ns!(cs, "T"), || Ok(self.t))?;
+                let exp = IV::GTVar::new_witness(ns!(cs, "T"), || Ok(self.t))?;
                 let scalar_in_fq = &I::Fq::from_repr(<I::Fq as PrimeField>::BigInt::from_bits_le(
                     &self.c.into_repr().to_bits_le(),
                 ))
@@ -109,9 +111,6 @@ where
             OpMode::Equality => {
                 ct.enforce_equal(&ct)?;
             }
-            _ => {
-                panic!("aie");
-            }
         };
         Ok(())
     }
@@ -120,11 +119,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_bls12_377::{constraints::PairingVar as IV, Bls12_377 as I, Fr};
-    use ark_bw6_761::BW6_761 as O;
-    use ark_groth16::Groth16;
-    use ark_relations::r1cs::{ConstraintLayer, ConstraintSystem, TracingMode};
-    use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
+    use ark_bls12_377::{constraints::PairingVar as IV, Bls12_377 as I};
+    use ark_relations::r1cs::ConstraintSystem;
 
     #[test]
     fn gt_size() {
