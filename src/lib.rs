@@ -2,12 +2,13 @@
 extern crate json;
 #[macro_use]
 extern crate lazy_static;
-use ark_ec::{PairingEngine, ProjectiveCurve};
+use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
 use ark_ff::{BigInteger, PrimeField};
 use ark_r1cs_std::{
     alloc::AllocVar,
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
+    groups::CurveVar,
     pairing::PairingVar,
     ToBitsGadget, ToConstraintFieldGadget,
 };
@@ -36,8 +37,10 @@ enum OpMode {
     ScalarMul,   // Fr * GT
     Equality,    // GT == GT
     Hash(usize), // H(number of gt elements)
-    //G1Mul,       // Fr * G1
-    Pairing, // e(G1,G2)
+    G1Mul,       // Fr * G1
+    MillerLoop,  // miller(G1,G2)
+    FinalExp,    // e(g1,g2)^r
+    Pairing,     // full pairing
 }
 
 struct GTCircuit<I, IV>
@@ -52,6 +55,7 @@ where
     t: I::Fqk,
     ag: I::G1Projective,
     bg: I::G2Projective,
+    miller_out: I::Fqk,
     mode: OpMode,
     poseidon_params: PoseidonParameters<I::Fq>,
     _iv: PhantomData<IV>,
@@ -88,6 +92,10 @@ where
             I::G1Projective::prime_subgroup_generator(),
             I::G2Projective::prime_subgroup_generator(),
         );
+        let miller_out = I::miller_loop([&(
+            ag.into_affine().into(),
+            I::G2Affine::prime_subgroup_generator().into(),
+        )]);
         // CT = GT^c = GT^{a+b} = GT^a * GT^b
         let ct = t.pow(&c.into_repr());
         assert_eq!(abt, ct);
@@ -101,6 +109,7 @@ where
             ct: ct,
             ag: ag,
             bg: I::G2Projective::prime_subgroup_generator(),
+            miller_out: miller_out,
             t: t,
             poseidon_params: params,
             _iv: PhantomData,
@@ -116,15 +125,16 @@ where
     IV::GTVar: ToConstraintFieldGadget<I::Fq>,
 {
     fn generate_constraints(self, cs: ConstraintSystemRef<I::Fq>) -> Result<(), SynthesisError> {
-        let at = IV::GTVar::new_witness(ns!(cs, "a"), || Ok(self.at))?;
-        let bt = IV::GTVar::new_witness(ns!(cs, "b"), || Ok(self.bt))?;
-        let ct = IV::GTVar::new_witness(ns!(cs, "CT"), || Ok(self.ct))?;
         match self.mode {
             OpMode::Mul => {
+                let ct = IV::GTVar::new_witness(ns!(cs, "CT"), || Ok(self.ct))?;
+                let at = IV::GTVar::new_witness(ns!(cs, "a"), || Ok(self.at))?;
+                let bt = IV::GTVar::new_witness(ns!(cs, "b"), || Ok(self.bt))?;
                 let exp = at * bt;
                 ct.enforce_equal(&exp)?;
             }
             OpMode::ScalarMul => {
+                let ct = IV::GTVar::new_witness(ns!(cs, "CT"), || Ok(self.ct))?;
                 let exp = IV::GTVar::new_witness(ns!(cs, "T"), || Ok(self.t))?;
                 let scalar_in_fq = &I::Fq::from_repr(<I::Fq as PrimeField>::BigInt::from_bits_le(
                     &self.c.into_repr().to_bits_le(),
@@ -136,24 +146,46 @@ where
                 ct.enforce_equal(&exp)?;
             }
             OpMode::Equality => {
+                let ct = IV::GTVar::new_witness(ns!(cs, "CT"), || Ok(self.ct))?;
                 ct.enforce_equal(&ct)?;
             }
             OpMode::Hash(n) => {
                 let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.poseidon_params);
+                let at = IV::GTVar::new_witness(ns!(cs, "a"), || Ok(self.at))?;
                 for i in 0..n {
                     sponge.absorb(&at.to_constraint_field()?);
                 }
                 sponge.squeeze_field_elements(1)?.remove(0);
             }
-            OpMode::Pairing => {} /*OpMode::G1Mul => {*/
-                                  /*let exp = IV::GTVar::new_witness(ns!(cs, "T"), || Ok(self.t))?;*/
-                                  /*let scalar_in_fq = &I::Fq::from_repr(<I::Fq as PrimeField>::BigInt::from_bits_le(*/
-                                  /*&self.c.into_repr().to_bits_le(),*/
-                                  /*))*/
-                                  /*.unwrap();*/
-                                  /*let c = FpVar::new_witness(ns!(cs, "c"), || Ok(scalar_in_fq))?;*/
-                                  /*let bits_c = c.to_bits_le()?;*/
-                                  /*}*/
+            OpMode::MillerLoop => {
+                let bg = IV::G2Var::new_witness(ns!(cs, "bg"), || Ok(self.bg))?;
+                let ag = IV::G1Var::new_witness(ns!(cs, "ag"), || Ok(self.ag))?;
+                let pag = IV::prepare_g1(&ag)?;
+                let pbg = IV::prepare_g2(&bg)?;
+                IV::miller_loop(&[pag], &[pbg])?;
+            }
+            OpMode::FinalExp => {
+                let m = IV::GTVar::new_witness(ns!(cs, "CT"), || Ok(self.ct))?;
+                let at = IV::GTVar::new_witness(ns!(cs, "a"), || Ok(self.at))?;
+                IV::final_exponentiation(&at)?;
+            }
+            OpMode::Pairing => {
+                let ag = IV::G1Var::new_witness(ns!(cs, "ag"), || Ok(self.ag))?;
+                let bg = IV::G2Var::new_witness(ns!(cs, "bg"), || Ok(self.bg))?;
+                let pag = IV::prepare_g1(&ag)?;
+                let pbg = IV::prepare_g2(&bg)?;
+                IV::pairing(pag, pbg)?;
+            }
+            OpMode::G1Mul => {
+                let ag = IV::G1Var::new_witness(ns!(cs, "ag"), || Ok(self.ag))?;
+                let scalar_in_fq = &I::Fq::from_repr(<I::Fq as PrimeField>::BigInt::from_bits_le(
+                    &self.c.into_repr().to_bits_le(),
+                ))
+                .unwrap();
+                let c = FpVar::new_witness(ns!(cs, "c"), || Ok(scalar_in_fq))?;
+                let bits_c = c.to_bits_le()?;
+                ag.scalar_mul_le(bits_c.iter())?;
+            }
         };
         Ok(())
     }
@@ -173,6 +205,10 @@ mod tests {
             OpMode::ScalarMul,
             OpMode::Equality,
             OpMode::Hash(7),
+            OpMode::MillerLoop,
+            OpMode::FinalExp,
+            OpMode::Pairing,
+            OpMode::G1Mul,
         ] {
             println!("GT operation {:?}", mode);
             let cs = ConstraintSystem::<<I as PairingEngine>::Fq>::new_ref();
