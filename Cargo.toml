@@ -17,8 +17,10 @@ ark-bls12-377 = { version = "^0.3.0", features = ["r1cs","curve"] }
 ark-bw6-761 = { version = "^0.3.0" }
 ark-groth16 = { version = "^0.3.0", features = ["r1cs"] }
 ark-sponge = { version = "^0.3.0" }
+ark-serialize = { version = "^0.3.0" }
 json = "0.12.4"
 lazy_static = "^1.4.0"
+eyre = "0.6.8"
 
 
 

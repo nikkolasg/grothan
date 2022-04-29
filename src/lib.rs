@@ -4,6 +4,7 @@ extern crate json;
 extern crate lazy_static;
 use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
 use ark_ff::{BigInteger, PrimeField};
+use ark_nonnative_field::NonNativeFieldVar;
 use ark_r1cs_std::{
     alloc::AllocVar,
     eq::EqGadget,
@@ -27,20 +28,24 @@ use ark_std::{
     rand::{CryptoRng, Rng},
     UniformRand,
 };
+use eyre::{Result, WrapErr};
 use std::ops::MulAssign;
 mod poseidon;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum OpMode {
-    Mul,         // GT * GT
-    ScalarMul,   // Fr * GT
-    Equality,    // GT == GT
-    Hash(usize), // H(number of gt elements)
-    G1Mul,       // Fr * G1
-    MillerLoop,  // miller(G1,G2)
-    FinalExp,    // e(g1,g2)^r
-    Pairing,     // full pairing
+    Mul,               // GT * GT
+    ScalarMul,         // Fr * GT
+    Equality,          // GT == GT
+    Hash(usize),       // H(number of gt elements)
+    G1Mul,             // Fr * G1
+    MillerLoop(usize), // miller(G1,G2)
+    FinalExp,          // e(g1,g2)^r
+    Pairing,           // full pairing
+    NNAFieldAdd,       // Non native field arithmetic Fr addition in Fq
+    NNAFieldMul,       // Non native field arithmetic Fr multiplication in Fq
+    NNAHash(usize),    // H(number of NNA field) -> NNA field
 }
 
 struct GTCircuit<I, IV>
@@ -157,12 +162,29 @@ where
                 }
                 sponge.squeeze_field_elements(1)?.remove(0);
             }
-            OpMode::MillerLoop => {
-                let bg = IV::G2Var::new_witness(ns!(cs, "bg"), || Ok(self.bg))?;
-                let ag = IV::G1Var::new_witness(ns!(cs, "ag"), || Ok(self.ag))?;
-                let pag = IV::prepare_g1(&ag)?;
-                let pbg = IV::prepare_g2(&bg)?;
-                IV::miller_loop(&[pag], &[pbg])?;
+            OpMode::NNAHash(n) => {
+                let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.poseidon_params);
+                let cv = NonNativeFieldVar::<I::Fr, I::Fq>::new_witness(
+                    ark_relations::ns!(cs, "share_nonnative"),
+                    || Ok(self.c.clone()),
+                )?;
+                for i in 0..n {
+                    sponge.absorb(&cv.to_constraint_field()?);
+                }
+                sponge.squeeze_nonnative_field_elements::<I::Fr>(1);
+            }
+            OpMode::MillerLoop(n) => {
+                let mut ps = Vec::new();
+                let mut qs = Vec::new();
+                for _ in 0..n {
+                    let bg = IV::G2Var::new_witness(ns!(cs, "bg"), || Ok(self.bg))?;
+                    let ag = IV::G1Var::new_witness(ns!(cs, "ag"), || Ok(self.ag))?;
+                    let pag = IV::prepare_g1(&ag)?;
+                    let pbg = IV::prepare_g2(&bg)?;
+                    ps.push(pag);
+                    qs.push(pbg);
+                }
+                IV::miller_loop(&ps, &qs)?;
             }
             OpMode::FinalExp => {
                 let m = IV::GTVar::new_witness(ns!(cs, "CT"), || Ok(self.ct))?;
@@ -186,6 +208,28 @@ where
                 let bits_c = c.to_bits_le()?;
                 ag.scalar_mul_le(bits_c.iter())?;
             }
+            OpMode::NNAFieldAdd => {
+                let cv = NonNativeFieldVar::<I::Fr, I::Fq>::new_witness(
+                    ark_relations::ns!(cs, "share_nonnative"),
+                    || Ok(self.c.clone()),
+                )?;
+                let cv2 = NonNativeFieldVar::<I::Fr, I::Fq>::new_witness(
+                    ark_relations::ns!(cs, "share_nonnative"),
+                    || Ok(self.c),
+                )?;
+                cv + cv2;
+            }
+            OpMode::NNAFieldMul => {
+                let cv = NonNativeFieldVar::<I::Fr, I::Fq>::new_witness(
+                    ark_relations::ns!(cs, "share_nonnative"),
+                    || Ok(self.c.clone()),
+                )?;
+                let cv2 = NonNativeFieldVar::<I::Fr, I::Fq>::new_witness(
+                    ark_relations::ns!(cs, "share_nonnative"),
+                    || Ok(self.c),
+                )?;
+                cv * cv2;
+            }
         };
         Ok(())
     }
@@ -194,21 +238,53 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ark_bls12_377::{constraints::PairingVar as IV, Bls12_377 as I};
+    use ark_bls12_377::{
+        constraints::PairingVar as IV, Bls12_377 as I, Fr, G1Projective as G1, G2Projective as G2,
+    };
     use ark_relations::r1cs::ConstraintSystem;
+    use ark_serialize::CanonicalSerialize;
+    use ark_std::One;
 
     #[test]
-    fn gt_size() {
+    fn sizes() {
+        let g1 = G1::prime_subgroup_generator();
+        print_size(g1, "size of g1");
+        let g2 = G2::prime_subgroup_generator();
+        let gt = <I as PairingEngine>::pairing::<G1, G2>(
+            g1.into_affine().into(),
+            g2.into_affine().into(),
+        );
+        print_size(g2, "size of g2");
+        print_size(gt, "size of GT");
+        print_size(Fr::one(), "size of Fr");
+        /*for (s, topic) in elements {*/
+        /*print_size(s, topic).unwrap();*/
+        /*}*/
+    }
+
+    fn print_size<S: CanonicalSerialize>(s: S, n: &str) -> Result<()> {
+        let mut v = Vec::new();
+        s.serialize(&mut v)?;
+        println!("{} -> {} bytes", n, v.len());
+        Ok(())
+    }
+
+    #[test]
+    fn bench() {
         let mut rng = ark_std::test_rng();
         for mode in vec![
             OpMode::Mul,
             OpMode::ScalarMul,
             OpMode::Equality,
             OpMode::Hash(7),
-            OpMode::MillerLoop,
+            OpMode::MillerLoop(1),
+            OpMode::MillerLoop(90),
             OpMode::FinalExp,
             OpMode::Pairing,
             OpMode::G1Mul,
+            OpMode::NNAFieldAdd,
+            OpMode::NNAFieldMul,
+            OpMode::NNAHash(3),
         ] {
             println!("GT operation {:?}", mode);
             let cs = ConstraintSystem::<<I as PairingEngine>::Fq>::new_ref();
