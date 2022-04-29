@@ -278,7 +278,7 @@ mod tests {
             OpMode::Equality,
             OpMode::Hash(7),
             OpMode::MillerLoop(1),
-            OpMode::MillerLoop(90),
+            OpMode::MillerLoop(45),
             OpMode::FinalExp,
             OpMode::Pairing,
             OpMode::G1Mul,
