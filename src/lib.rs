@@ -1,3 +1,7 @@
+#[macro_use]
+extern crate json;
+#[macro_use]
+extern crate lazy_static;
 use ark_ec::{PairingEngine, ProjectiveCurve};
 use ark_ff::{BigInteger, PrimeField};
 use ark_r1cs_std::{
@@ -5,23 +9,35 @@ use ark_r1cs_std::{
     eq::EqGadget,
     fields::{fp::FpVar, FieldVar},
     pairing::PairingVar,
-    ToBitsGadget,
+    ToBitsGadget, ToConstraintFieldGadget,
 };
 use ark_relations::{
     ns,
     r1cs::{ConstraintSynthesizer, ConstraintSystemRef, Field, SynthesisError},
 };
-use ark_std::marker::PhantomData;
-use ark_std::rand::{CryptoRng, Rng};
-use ark_std::UniformRand;
+use ark_sponge::constraints::CryptographicSpongeVar;
+use ark_sponge::{poseidon::PoseidonParameters, Absorb};
+use ark_sponge::{
+    poseidon::{constraints::PoseidonSpongeVar, PoseidonSponge},
+    CryptographicSponge,
+};
+use ark_std::{
+    marker::PhantomData,
+    rand::{CryptoRng, Rng},
+    UniformRand,
+};
 use std::ops::MulAssign;
+mod poseidon;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum OpMode {
-    Mul,       // GT * GT
-    ScalarMul, // Fr * GT
-    Equality,  // GT == GT
+    Mul,         // GT * GT
+    ScalarMul,   // Fr * GT
+    Equality,    // GT == GT
+    Hash(usize), // H(number of gt elements)
+    //G1Mul,       // Fr * G1
+    Pairing, // e(G1,G2)
 }
 
 struct GTCircuit<I, IV>
@@ -34,7 +50,10 @@ where
     bt: I::Fqk,
     ct: I::Fqk,
     t: I::Fqk,
+    ag: I::G1Projective,
+    bg: I::G2Projective,
     mode: OpMode,
+    poseidon_params: PoseidonParameters<I::Fq>,
     _iv: PhantomData<IV>,
     _i: PhantomData<I>,
 }
@@ -45,7 +64,11 @@ where
     IV: PairingVar<I>,
 {
     #[allow(dead_code)]
-    pub fn new<R: Rng + CryptoRng>(mut rng: &mut R, mode: OpMode) -> Self {
+    pub fn new<R: Rng + CryptoRng>(
+        mut rng: &mut R,
+        mode: OpMode,
+        params: PoseidonParameters<I::Fq>,
+    ) -> Self {
         // AT = e(aG,G)
         // BT = e(bG,G)
         // CT = AT * BT = e(G,G)^{a+b}
@@ -76,7 +99,10 @@ where
             at: at,
             bt: bt,
             ct: ct,
+            ag: ag,
+            bg: I::G2Projective::prime_subgroup_generator(),
             t: t,
+            poseidon_params: params,
             _iv: PhantomData,
             _i: PhantomData,
         }
@@ -87,6 +113,7 @@ impl<I, IV> ConstraintSynthesizer<I::Fq> for GTCircuit<I, IV>
 where
     I: PairingEngine,
     IV: PairingVar<I>,
+    IV::GTVar: ToConstraintFieldGadget<I::Fq>,
 {
     fn generate_constraints(self, cs: ConstraintSystemRef<I::Fq>) -> Result<(), SynthesisError> {
         let at = IV::GTVar::new_witness(ns!(cs, "a"), || Ok(self.at))?;
@@ -111,6 +138,22 @@ where
             OpMode::Equality => {
                 ct.enforce_equal(&ct)?;
             }
+            OpMode::Hash(n) => {
+                let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.poseidon_params);
+                for i in 0..n {
+                    sponge.absorb(&at.to_constraint_field()?);
+                }
+                sponge.squeeze_field_elements(1)?.remove(0);
+            }
+            OpMode::Pairing => {} /*OpMode::G1Mul => {*/
+                                  /*let exp = IV::GTVar::new_witness(ns!(cs, "T"), || Ok(self.t))?;*/
+                                  /*let scalar_in_fq = &I::Fq::from_repr(<I::Fq as PrimeField>::BigInt::from_bits_le(*/
+                                  /*&self.c.into_repr().to_bits_le(),*/
+                                  /*))*/
+                                  /*.unwrap();*/
+                                  /*let c = FpVar::new_witness(ns!(cs, "c"), || Ok(scalar_in_fq))?;*/
+                                  /*let bits_c = c.to_bits_le()?;*/
+                                  /*}*/
         };
         Ok(())
     }
@@ -125,10 +168,15 @@ mod tests {
     #[test]
     fn gt_size() {
         let mut rng = ark_std::test_rng();
-        for mode in vec![OpMode::Mul, OpMode::ScalarMul, OpMode::Equality] {
+        for mode in vec![
+            OpMode::Mul,
+            OpMode::ScalarMul,
+            OpMode::Equality,
+            OpMode::Hash(7),
+        ] {
             println!("GT operation {:?}", mode);
             let cs = ConstraintSystem::<<I as PairingEngine>::Fq>::new_ref();
-            GTCircuit::<I, IV>::new(&mut rng, mode)
+            GTCircuit::<I, IV>::new(&mut rng, mode, poseidon::get_bls12377_fq_params(2))
                 .generate_constraints(cs.clone())
                 .unwrap();
             assert!(cs.is_satisfied().unwrap());
