@@ -241,25 +241,26 @@ mod tests {
     use ark_bls12_377::{
         constraints::PairingVar as IV, Bls12_377 as I, Fr, G1Projective as G1, G2Projective as G2,
     };
+
+    use ark_bw6_761 as bw6;
     use ark_relations::r1cs::ConstraintSystem;
     use ark_serialize::CanonicalSerialize;
     use ark_std::One;
 
+    fn print_size_of_group<E: PairingEngine>(name: &str) {
+        let g1 = E::G1Projective::prime_subgroup_generator();
+        let g2 = E::G2Projective::prime_subgroup_generator();
+        let gt = E::pairing(g1, g2);
+
+        print_size(g1, &format!("{name} : size of g1")).expect("wow");
+        print_size(g2, &format!("{name} : size of g2")).expect("wow");
+        print_size(gt, &format!("{name}  : size of GT")).expect("wow");
+        print_size(Fr::one(), &format!("{name} : size of Fr")).expect("wow");
+    }
     #[test]
     fn sizes() {
-        let g1 = G1::prime_subgroup_generator();
-        print_size(g1, "size of g1");
-        let g2 = G2::prime_subgroup_generator();
-        let gt = <I as PairingEngine>::pairing::<G1, G2>(
-            g1.into_affine().into(),
-            g2.into_affine().into(),
-        );
-        print_size(g2, "size of g2");
-        print_size(gt, "size of GT");
-        print_size(Fr::one(), "size of Fr");
-        /*for (s, topic) in elements {*/
-        /*print_size(s, topic).unwrap();*/
-        /*}*/
+        print_size_of_group::<I>("bls12-377");
+        print_size_of_group::<bw6::BW6_761>("BW6-761");
     }
 
     fn print_size<S: CanonicalSerialize>(s: S, n: &str) -> Result<()> {
