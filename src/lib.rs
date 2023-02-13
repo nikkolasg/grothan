@@ -2,7 +2,7 @@
 extern crate json;
 #[macro_use]
 extern crate lazy_static;
-use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
+use ark_ec::{PairingEngine, ProjectiveCurve};
 use ark_ff::{BigInteger, PrimeField};
 use ark_nonnative_field::NonNativeFieldVar;
 use ark_r1cs_std::{
@@ -30,9 +30,9 @@ use ark_std::{
 };
 use eyre::{Result, WrapErr};
 use std::ops::MulAssign;
-mod poseidon;
-mod bls12381;
 mod bls12377;
+mod bls12381;
+mod poseidon;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -40,14 +40,14 @@ enum OpMode {
     Mul,               // GT * GT
     ScalarMul,         // Fr * GT
     Equality,          // GT == GT
-    Hash(usize),       // H(number of gt elements)
+    HashGT(usize),     // H(number of gt elements)
+    HashFr(usize),     // H(number of fr elements)
+    NNAHash(usize),    // H(number of NNA field) -> NNA field
     G1Mul,             // Fr * G1
     MillerLoop(usize), // miller(G1,G2)
     FinalExp,          // e(g1,g2)^r
     Pairing,           // full pairing
     NNAFieldAdd,       // Non native field arithmetic Fr addition in Fq
     NNAFieldMul,       // Non native field arithmetic Fr multiplication in Fq
-    NNAHash(usize),    // H(number of NNA field) -> NNA field
-    NNAG1Mul,          // s*G in non native 
+    NNAG1Mul,          // s*G in non native
 }
-

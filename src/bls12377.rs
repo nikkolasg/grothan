@@ -1,3 +1,5 @@
+use super::poseidon;
+use super::OpMode;
 use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
 use ark_ff::{BigInteger, PrimeField};
 use ark_nonnative_field::NonNativeFieldVar;
@@ -14,11 +16,8 @@ use ark_relations::{
     r1cs::{ConstraintSynthesizer, ConstraintSystemRef, Field, SynthesisError},
 };
 use ark_sponge::constraints::CryptographicSpongeVar;
-use ark_sponge::{poseidon::PoseidonParameters, Absorb};
-use ark_sponge::{
-    poseidon::{constraints::PoseidonSpongeVar, PoseidonSponge},
-    CryptographicSponge,
-};
+use ark_sponge::poseidon::PoseidonParameters;
+use ark_sponge::{poseidon::constraints::PoseidonSpongeVar, CryptographicSponge};
 use ark_std::{
     marker::PhantomData,
     rand::{CryptoRng, Rng},
@@ -26,8 +25,6 @@ use ark_std::{
 };
 use eyre::{Result, WrapErr};
 use std::ops::MulAssign;
-use super::OpMode;
-use super::poseidon;
 struct GTCircuit<I, IV>
 where
     I: PairingEngine,
@@ -65,10 +62,10 @@ where
         let b = I::Fr::rand(&mut rng);
         let c = a + b;
         let mut ag = I::G1Projective::prime_subgroup_generator();
-        ag.mul_assign(a);
         let mut bg = I::G1Projective::prime_subgroup_generator();
-        bg.mul_assign(b);
         let mut cg = I::G1Projective::prime_subgroup_generator();
+        ag.mul_assign(a);
+        bg.mul_assign(b);
         cg.mul_assign(c);
         let at = I::pairing(ag, I::G2Projective::prime_subgroup_generator());
         let bt = I::pairing(bg, I::G2Projective::prime_subgroup_generator());
@@ -134,7 +131,7 @@ where
                 let ct = IV::GTVar::new_witness(ns!(cs, "CT"), || Ok(self.ct))?;
                 ct.enforce_equal(&ct)?;
             }
-            OpMode::Hash(n) => {
+            OpMode::HashGT(n) => {
                 let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.poseidon_params);
                 let at = IV::GTVar::new_witness(ns!(cs, "a"), || Ok(self.at))?;
                 for i in 0..n {
@@ -257,7 +254,7 @@ mod tests {
             OpMode::Mul,
             OpMode::ScalarMul,
             OpMode::Equality,
-            OpMode::Hash(7),
+            OpMode::HashGT(7),
             OpMode::MillerLoop(1),
             OpMode::MillerLoop(45),
             OpMode::FinalExp,
