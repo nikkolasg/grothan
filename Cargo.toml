@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 ark-ff = { version = "^0.3.0" }
+rand = { version = "0.8.5" }
 ark-std = { version = "^0.3.0" }
 ark-ec = { version = "^0.3.0" }
 ark-snark = { version = "^0.3.0" }
@@ -14,6 +15,7 @@ ark-r1cs-std = { version = "^0.3.0" }
 ark-nonnative-field = { version = "0.3.0"}
 ark-relations = { version = "^0.3.0" }
 ark-bls12-377 = { version = "^0.3.0", features = ["r1cs","curve"] }
+ark-bls12-381 = { version = "^0.3.0", features = ["curve"] }
 ark-bw6-761 = { version = "^0.3.0" }
 ark-groth16 = { version = "^0.3.0", features = ["r1cs"] }
 ark-sponge = { version = "^0.3.0" }
