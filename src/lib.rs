@@ -47,7 +47,9 @@ enum OpMode {
     MillerLoop(usize), // miller(G1,G2)
     FinalExp,          // e(g1,g2)^r
     Pairing,           // full pairing
-    NNAFieldAdd,       // Non native field arithmetic Fr addition in Fq
-    NNAFieldMul,       // Non native field arithmetic Fr multiplication in Fq
+    NNAFieldAddOverFq, // Non native field arithmetic Fr addition in Fq
+    NNAFieldMulOverFq, // Non native field arithmetic Fr multiplication in Fq
     NNAG1Mul,          // s*G in non native
+    NNAFielAddOverF2,  // Non native field arithmetic Fr over a different unrelated field F2
+                       // e.g. it can be bls12-381's Fr done on bls12-377's Fr
 }

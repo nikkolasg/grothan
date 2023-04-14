@@ -1,5 +1,6 @@
 use super::poseidon;
 use super::OpMode;
+use ark_ec::bls12;
 use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
 use ark_ff::{BigInteger, PrimeField};
 use ark_nonnative_field::NonNativeFieldVar;
@@ -25,7 +26,7 @@ use ark_std::{
 };
 use eyre::{Result, WrapErr};
 use std::ops::MulAssign;
-struct GTCircuit<I, IV>
+struct FqCircuit<I, IV>
 where
     I: PairingEngine,
     IV: PairingVar<I>,
@@ -44,7 +45,7 @@ where
     _i: PhantomData<I>,
 }
 
-impl<I, IV> GTCircuit<I, IV>
+impl<I, IV> FqCircuit<I, IV>
 where
     I: PairingEngine,
     IV: PairingVar<I>,
@@ -100,7 +101,7 @@ where
     }
 }
 
-impl<I, IV> ConstraintSynthesizer<I::Fq> for GTCircuit<I, IV>
+impl<I, IV> ConstraintSynthesizer<I::Fq> for FqCircuit<I, IV>
 where
     I: PairingEngine,
     IV: PairingVar<I>,
@@ -185,7 +186,7 @@ where
                 let bits_c = c.to_bits_le()?;
                 ag.scalar_mul_le(bits_c.iter())?;
             }
-            OpMode::NNAFieldAdd => {
+            OpMode::NNAFieldAddOverFq => {
                 let cv = NonNativeFieldVar::<I::Fr, I::Fq>::new_witness(
                     ark_relations::ns!(cs, "share_nonnative"),
                     || Ok(self.c.clone()),
@@ -196,7 +197,7 @@ where
                 )?;
                 cv + cv2;
             }
-            OpMode::NNAFieldMul => {
+            OpMode::NNAFieldMulOverFq => {
                 let cv = NonNativeFieldVar::<I::Fr, I::Fq>::new_witness(
                     ark_relations::ns!(cs, "share_nonnative"),
                     || Ok(self.c.clone()),
@@ -213,6 +214,59 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
+enum NNAMode {
+    Add,
+    Mul,
+}
+
+struct NNACircuit<F: PrimeField, CF: PrimeField> {
+    e1: F,
+    e2: F,
+    e3: F,
+    m: NNAMode,
+    _f1: PhantomData<F>,
+    _f2: PhantomData<CF>,
+}
+
+impl<F: PrimeField, CF: PrimeField> NNACircuit<F, CF> {
+    fn new(m: NNAMode) -> Self {
+        let e1 = F::rand(&mut rand::thread_rng());
+        let e2 = F::rand(&mut rand::thread_rng());
+        let e3 = e1 * e2;
+        Self {
+            m,
+            _f1: PhantomData,
+            _f2: PhantomData,
+            e1,
+            e2,
+            e3,
+        }
+    }
+}
+
+impl<F: PrimeField, CF: PrimeField> ConstraintSynthesizer<CF> for NNACircuit<F, CF> {
+    fn generate_constraints(self, cs: ConstraintSystemRef<CF>) -> Result<(), SynthesisError> {
+        let nna_e1 = NonNativeFieldVar::<F, CF>::new_witness(
+            ark_relations::ns!(cs, "nna_circuit_e1"),
+            || Ok(self.e1.clone()),
+        )?;
+        let nna_e2 = NonNativeFieldVar::<F, CF>::new_witness(
+            ark_relations::ns!(cs, "nna_circuit_e2"),
+            || Ok(self.e2.clone()),
+        )?;
+
+        match self.m {
+            NNAMode::Add => {
+                let res_e3 = nna_e1 + nna_e2;
+            }
+            NNAMode::Mul => {
+                let res_e3 = nna_e1 * nna_e2;
+            }
+        }
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,7 +302,19 @@ mod tests {
     }
 
     #[test]
-    fn bench() {
+    fn bench_381_in_377() {
+        for mode in vec![NNAMode::Add, NNAMode::Mul].into_iter() {
+            let cs = ConstraintSystem::<Fr>::new_ref();
+            NNACircuit::<ark_bls12_381::Fr, Fr>::new(mode.clone())
+                .generate_constraints(cs.clone())
+                .unwrap();
+            assert!(cs.is_satisfied().unwrap());
+            println!("NNA Mode {:?} : {}", mode, cs.num_constraints());
+        }
+    }
+
+    #[test]
+    fn bench_bls12377() {
         let mut rng = ark_std::test_rng();
         for mode in vec![
             OpMode::Mul,
@@ -260,13 +326,13 @@ mod tests {
             OpMode::FinalExp,
             OpMode::Pairing,
             OpMode::G1Mul,
-            OpMode::NNAFieldAdd,
-            OpMode::NNAFieldMul,
+            OpMode::NNAFieldAddOverFq,
+            OpMode::NNAFieldMulOverFq,
             OpMode::NNAHash(3),
         ] {
             println!("GT operation {:?}", mode);
             let cs = ConstraintSystem::<<I as PairingEngine>::Fq>::new_ref();
-            GTCircuit::<I, IV>::new(&mut rng, mode, poseidon::get_bls12377_fq_params(2))
+            FqCircuit::<I, IV>::new(&mut rng, mode, poseidon::get_bls12377_fq_params(2))
                 .generate_constraints(cs.clone())
                 .unwrap();
             assert!(cs.is_satisfied().unwrap());
