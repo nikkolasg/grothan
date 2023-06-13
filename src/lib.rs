@@ -37,13 +37,15 @@ mod poseidon;
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum OpMode {
-    Mul,               // GT * GT
-    ScalarMul,         // Fr * GT
+    Mul,   // GT * GT
+    GtMul, // Fr * GT
+    GtAdd, // GT + GT
     Equality,          // GT == GT
     HashGT(usize),     // H(number of gt elements)
     HashFr(usize),     // H(number of fr elements)
     NNAHash(usize),    // H(number of NNA field) -> NNA field
     G1Mul,             // Fr * G1
+    G2Mul,             // Fr * G2
     MillerLoop(usize), // miller(G1,G2)
     FinalExp,          // e(g1,g2)^r
     Pairing,           // full pairing

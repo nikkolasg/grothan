@@ -116,7 +116,7 @@ where
                 let exp = at * bt;
                 ct.enforce_equal(&exp)?;
             }
-            OpMode::ScalarMul => {
+            OpMode::GtMul => {
                 let ct = IV::GTVar::new_witness(ns!(cs, "CT"), || Ok(self.ct))?;
                 let exp = IV::GTVar::new_witness(ns!(cs, "T"), || Ok(self.t))?;
                 let scalar_in_fq = &I::Fq::from_repr(<I::Fq as PrimeField>::BigInt::from_bits_le(
@@ -127,6 +127,14 @@ where
                 let bits_c = c.to_bits_le()?;
                 let exp = exp.pow_le(&bits_c)?;
                 ct.enforce_equal(&exp)?;
+            }
+            OpMode::GtAdd => {
+                // Free because of addition but record it for history
+                let a = IV::GTVar::new_witness(ns!(cs, "at"), || Ok(self.at))?;
+                let b = IV::GTVar::new_witness(ns!(cs, "bt"), || Ok(self.bt))?;
+                let exp = IV::GTVar::new_witness(ns!(cs, "at"), || Ok(self.ct))?;
+                let c = a * b;
+                c.enforce_equal(&exp)?;
             }
             OpMode::Equality => {
                 let ct = IV::GTVar::new_witness(ns!(cs, "CT"), || Ok(self.ct))?;
@@ -186,6 +194,17 @@ where
                 let bits_c = c.to_bits_le()?;
                 ag.scalar_mul_le(bits_c.iter())?;
             }
+            OpMode::G2Mul => {
+                let bg = IV::G2Var::new_witness(ns!(cs, "bg"), || Ok(self.bg))?;
+                let scalar_in_fq = &I::Fq::from_repr(<I::Fq as PrimeField>::BigInt::from_bits_le(
+                    &self.c.into_repr().to_bits_le(),
+                ))
+                .unwrap();
+                let c = FpVar::new_witness(ns!(cs, "c"), || Ok(scalar_in_fq))?;
+                let bits_c = c.to_bits_le()?;
+                bg.scalar_mul_le(bits_c.iter())?;
+            }
+
             OpMode::NNAFieldAddOverFq => {
                 let cv = NonNativeFieldVar::<I::Fr, I::Fq>::new_witness(
                     ark_relations::ns!(cs, "share_nonnative"),
@@ -318,7 +337,8 @@ mod tests {
         let mut rng = ark_std::test_rng();
         for mode in vec![
             OpMode::Mul,
-            OpMode::ScalarMul,
+            OpMode::GtMul,
+            OpMode::GtAdd,
             OpMode::Equality,
             OpMode::HashGT(7),
             OpMode::MillerLoop(1),
@@ -326,6 +346,7 @@ mod tests {
             OpMode::FinalExp,
             OpMode::Pairing,
             OpMode::G1Mul,
+            OpMode::G2Mul,
             OpMode::NNAFieldAddOverFq,
             OpMode::NNAFieldMulOverFq,
             OpMode::NNAHash(3),
